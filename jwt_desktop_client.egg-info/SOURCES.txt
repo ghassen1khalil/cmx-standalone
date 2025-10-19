@@ -1,0 +1,17 @@
+README.md
+pyproject.toml
+setup.py
+./app/__init__.py
+./app/__main__.py
+./app/auth.py
+./app/gui.py
+app/__init__.py
+app/__main__.py
+app/auth.py
+app/gui.py
+jwt_desktop_client.egg-info/PKG-INFO
+jwt_desktop_client.egg-info/SOURCES.txt
+jwt_desktop_client.egg-info/dependency_links.txt
+jwt_desktop_client.egg-info/requires.txt
+jwt_desktop_client.egg-info/top_level.txt
+tests/test_auth.py

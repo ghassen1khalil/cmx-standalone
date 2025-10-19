@@ -8,6 +8,7 @@ import base64
 import hashlib
 import hmac
 import json
+import requests
 
 
 @dataclass(frozen=True)
@@ -16,8 +17,8 @@ class EnvironmentConfig:
 
     name: str
     label: str
-    audience: str
     token_url: str
+    cmxCoreApi: str
 
 
 class AuthService:
@@ -71,17 +72,28 @@ class AuthService:
             raise KeyError(env_name)
 
         environment = self._environments[env_name]
-        issued_at = datetime.now(timezone.utc)
-        payload = {
-            "iss": client_id,
-            "aud": environment.audience,
-            "iat": int(issued_at.timestamp()),
-            "exp": int((issued_at + timedelta(minutes=5)).timestamp()),
-            "env": environment.name,
-            "token_url": environment.token_url,
+        
+        # Préparation des données pour l'appel au webservice
+        headers = {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Authorization': f'Basic {base64.b64encode(f"{client_id}:{client_secret}".encode("ascii")).decode("ascii")}'
         }
-        header = {"alg": "HS256", "typ": "JWT"}
-        return _encode_jwt(header, payload, client_secret)
+        
+        data = {
+            'grant_type': 'client_credentials',
+            'scope': 'cmx_business'
+        }
+        
+        try:
+            response = requests.post(
+                environment.token_url,
+                headers=headers,
+                data=data
+            )
+            response.raise_for_status()
+            return response.json()['access_token']
+        except requests.RequestException as e:
+            raise ValueError(f"Erreur lors de l'appel au service d'authentification: {str(e)}")
 
 
 def _encode_jwt(header: Dict[str, str], payload: Dict[str, object], secret: str) -> str:
@@ -106,23 +118,96 @@ def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
 
 
+class CMXService:
+    """Service pour interagir avec l'API CMX Core."""
+
+    def __init__(self, environment: EnvironmentConfig):
+        self._environment = environment
+
+    def get_documents(self, jwt: str, profile: str, enduser: str, store_id: str) -> Dict:
+        """Récupère les documents via l'API CMX Core.
+
+        Parameters
+        ----------
+        jwt : str
+            Le jeton JWT pour l'authentification
+        profile : str
+            Le profil CMX à utiliser
+        enduser : str
+            L'utilisateur CMX
+        store_id : str
+            L'ID du store CMX
+
+        Returns
+        -------
+        Dict
+            La réponse du service
+
+        Raises
+        ------
+        requests.RequestException
+            Si une erreur se produit lors de l'appel au service
+        """
+        headers = {
+            'Authorization': f'Bearer {jwt}',
+            'Accept': 'application/octet-stream, application/json',
+            'cmx-enduser': enduser,
+            'cmx-profile': profile,
+            'cmx-store-id': store_id
+        }
+
+        url = f"{self._environment.cmxCoreApi}/v2/thor/core/documents"
+        
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        return response.json()
+
+
+def is_jwt_valid(token: str | None) -> bool:
+    """Vérifie si le JWT est valide et non expiré.
+
+    Parameters
+    ----------
+    token : str | None
+        Le JWT à vérifier
+
+    Returns
+    -------
+    bool
+        True si le token est valide et non expiré, False sinon
+    """
+    if not token:
+        return False
+    try:
+        # Décode la partie payload du JWT
+        payload_part = token.split('.')[1]
+        # Ajoute le padding nécessaire
+        padding = '=' * (-len(payload_part) % 4)
+        payload_bytes = base64.b64decode(payload_part + padding)
+        payload = json.loads(payload_bytes)
+        
+        # Vérifie l'expiration
+        exp_timestamp = payload.get('exp')
+        if not exp_timestamp:
+            return False
+        
+        current_timestamp = int(datetime.now(timezone.utc).timestamp())
+        return current_timestamp < exp_timestamp
+    except (IndexError, json.JSONDecodeError, TypeError):
+        return False
+
+
 DEFAULT_ENVIRONMENTS = (
     EnvironmentConfig(
-        name="dev",
-        label="Développement",
-        audience="https://api.dev.example.com",
-        token_url="https://auth.dev.example.com/oauth/token",
-    ),
-    EnvironmentConfig(
-        name="staging",
+        name="Staging",
         label="Recette",
-        audience="https://api.staging.example.com",
-        token_url="https://auth.staging.example.com/oauth/token",
+        token_url="https://onelogin.stg.axa.com/as/token.oauth2",
+        cmxCoreApi="https://cmx-eu.corp.intraxa",
     ),
     EnvironmentConfig(
-        name="prod",
+        name="Production",
         label="Production",
-        audience="https://api.example.com",
-        token_url="https://auth.example.com/oauth/token",
+        token_url="https://onelogin.axa.com/as/token.oauth2",
+        cmxCoreApi="https://cmx-eu.corp.intraxa",
     ),
 )
